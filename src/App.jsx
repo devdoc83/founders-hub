@@ -38,6 +38,8 @@ const CHANNELS = [
   { id: "general", label: "General", emoji: "💬", blurb: "Everything else. Wins, rants, memes, life." },
 ];
 
+const MEMBERS_TAB = { id: "members", label: "Members", emoji: "\ud83d\udc65", blurb: "Everyone in the hub and where they are in the journey." };
+
 const INTRO_POST = {
   id: "pinned_intro",
   pinned: true,
@@ -357,6 +359,7 @@ function Composer({ channel, onSubmit, onCancel }) {
 function PostCard({ post, me, onUpvote, onReply, showChannel }) {
   const [open, setOpen] = useState(false);
   const [reply, setReply] = useState("");
+  const [replyTo, setReplyTo] = useState(null);
   const [busy, setBusy] = useState(false);
   const upvoted = post.upvotes.includes(me.name);
   const ch = showChannel ? chanOf(post.channelId) : null;
@@ -405,7 +408,18 @@ function PostCard({ post, me, onUpvote, onReply, showChannel }) {
                   <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
                     <span style={{ fontSize: 12, fontWeight: 700, color: C.ink }}>{r.author}</span>
                     <Chip status={r.status} small />
+                    {r.replyTo && (
+                      <span style={{ fontSize: 10.5, color: C.orangeDark, fontWeight: 700, fontFamily: "ui-monospace, Menlo, monospace" }}>
+                        \u2192 @{r.replyTo}
+                      </span>
+                    )}
                     <span style={{ fontSize: 10.5, color: C.sub, fontFamily: "ui-monospace, Menlo, monospace" }}>{timeAgo(r.ts)}</span>
+                    <button
+                      onClick={() => setReplyTo(r.author)}
+                      style={{ background: "none", border: "none", color: C.sub, fontSize: 10.5, fontWeight: 700, cursor: "pointer", padding: 0, fontFamily: "inherit" }}
+                    >
+                      \u21aa reply
+                    </button>
                   </div>
                   <div style={{ fontSize: 13, color: "#3F3F37", lineHeight: 1.5, marginTop: 3, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{r.body}</div>
                 </div>
@@ -420,8 +434,9 @@ function PostCard({ post, me, onUpvote, onReply, showChannel }) {
                   onKeyDown={async (e) => {
                     if (e.key === "Enter" && reply.trim() && !busy) {
                       setBusy(true);
-                      await onReply(post, reply.trim());
+                      await onReply(post, reply.trim(), replyTo);
                       setReply("");
+                      setReplyTo(null);
                       setBusy(false);
                     }
                   }}
@@ -431,8 +446,9 @@ function PostCard({ post, me, onUpvote, onReply, showChannel }) {
                   style={{ padding: "8px 14px" }}
                   onClick={async () => {
                     setBusy(true);
-                    await onReply(post, reply.trim());
+                    await onReply(post, reply.trim(), replyTo);
                     setReply("");
+                    setReplyTo(null);
                     setBusy(false);
                   }}
                 >
@@ -491,7 +507,13 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (profile && results === null) refresh(channel.id);
+    if (!profile || results !== null) return;
+    if (channel.id === "members") {
+      setLoading(true);
+      loadMembers().then((m) => { setMembers(m); setLoading(false); });
+    } else {
+      refresh(channel.id);
+    }
   }, [profile, channel, refresh, results]);
 
   const mutate = async (chanId, fn) => {
@@ -519,11 +541,11 @@ export default function App() {
     );
   };
 
-  const addReply = async (post, body) => {
+  const addReply = async (post, body, replyTo) => {
     await mutate(post.channelId || channel.id, (list) =>
       list.map((p) =>
         p.id === post.id
-          ? { ...p, replies: [...p.replies, { id: `r_${Date.now()}`, author: profile.name, status: profile.status, body, ts: Date.now() }] }
+          ? { ...p, replies: [...p.replies, { id: `r_${Date.now()}`, author: profile.name, status: profile.status, body, ts: Date.now(), ...(replyTo ? { replyTo } : {}) }] }
           : p
       )
     );
@@ -634,7 +656,7 @@ export default function App() {
       {!inSearch && (
         <nav style={{ background: C.card, borderBottom: `1px solid ${C.line}`, overflowX: "auto" }}>
           <div style={{ maxWidth: 760, margin: "0 auto", display: "flex", gap: 2, padding: "0 8px" }}>
-            {CHANNELS.map((ch) => (
+            {[...CHANNELS, MEMBERS_TAB].map((ch) => (
               <button
                 key={ch.id}
                 onClick={() => { setChannel(ch); setComposing(false); }}
@@ -673,6 +695,28 @@ export default function App() {
               )}
             </>
           )
+        ) : channel.id === "members" ? (
+          <>
+            <p style={{ color: C.sub, fontSize: 12.5, lineHeight: 1.4, margin: "0 0 14px" }}>{channel.blurb}</p>
+            {loading ? (
+              <div style={{ textAlign: "center", color: C.sub, padding: 40, fontSize: 13, fontFamily: "ui-monospace, Menlo, monospace" }}>loading members\u2026</div>
+            ) : (
+              Object.entries(members)
+                .sort((a, b) => b[1].joinedAt - a[1].joinedAt)
+                .map(([name, m]) => (
+                  <div key={name} style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 12, padding: "12px 16px", marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+                      <span style={{ width: 30, height: 30, borderRadius: 999, background: "#FFF7ED", color: C.orangeDark, display: "inline-flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 13, flexShrink: 0 }}>
+                        {name.slice(0, 1).toUpperCase()}
+                      </span>
+                      <span style={{ fontSize: 14, fontWeight: 700, color: C.ink, overflow: "hidden", textOverflow: "ellipsis" }}>{name}</span>
+                      <Chip status={m.status} small />
+                    </div>
+                    <span style={{ fontSize: 11, color: C.sub, fontFamily: "ui-monospace, Menlo, monospace" }}>joined {timeAgo(m.joinedAt)}</span>
+                  </div>
+                ))
+            )}
+          </>
         ) : (
           <>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 14 }}>
