@@ -1,6 +1,6 @@
-# 🧡 F26 Founders Hub
+# 🧡 Founders Hub
 
-An always-on community board for **YC Fall 2026 applicants** — born from the
+An always-on community board for **YC batch applicants** (starting with Fall 2026) — born from the
 r/ycombinator application megathread. Applied, interviewing, accepted, rejected,
 or building anyway: everyone keeps helping each other here, long after decision day.
 
@@ -24,7 +24,14 @@ Set your own invite code in a `.env` file (never commit real codes to a public r
 
 ```
 VITE_INVITE_CODE=YOUR-SECRET-CODE
+VITE_BATCH_LABEL=F26
+VITE_BATCH_NAME=YC Fall 2026
 ```
+
+**Batch-agnostic by design:** when the next batch opens, just change the two batch
+vars (e.g. `W27` / `YC Winter 2027`) — the app spins up a fresh board for the new
+batch automatically, while previous batches' data stays intact (storage keys are
+namespaced per batch).
 
 ## ⚠️ Demo mode — read this first
 
@@ -40,6 +47,7 @@ not multi-user yet. Making it real is the #1 roadmap item — see below.
 - [ ] Realtime updates instead of manual refresh
 - [ ] Notifications for replies
 - [ ] Direct messages for co-founder matching
+- [ ] Batch switcher / archive browser to revisit past batches
 - [ ] Deploy story (Vercel/Netlify one-click)
 
 ## Contributing

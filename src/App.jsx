@@ -5,6 +5,10 @@ import { storage } from "./storage";
 // Share this code ONLY in your subreddit thread / DMs.
 // Ask Claude to change it anytime before publishing.
 const INVITE_CODE = import.meta.env.VITE_INVITE_CODE || "F26-BUILD";
+// Batch is configurable — future batches just change these env vars.
+// Each batch label gets its own fresh board (storage keys are namespaced).
+const BATCH_LABEL = import.meta.env.VITE_BATCH_LABEL || "F26";
+const BATCH_NAME = import.meta.env.VITE_BATCH_NAME || "YC Fall 2026";
 
 // ---------- Design tokens (modern Hacker News homage) ----------
 const C = {
@@ -38,7 +42,7 @@ const INTRO_POST = {
   id: "pinned_intro",
   pinned: true,
   title: "👋 Introduce yourself — who are you and what are you building?",
-  body: "Welcome to the F26 Founders Hub! Reply below with:\n\n1. Your name / handle\n2. What you're building (one line)\n3. Where you are in the batch journey\n4. One thing you could use help with\n\nThis group is for the long run — deadline or no deadline, we keep building together. 🧡",
+  body: "Welcome to the Founders Hub! Reply below with:\n\n1. Your name / handle\n2. What you're building (one line)\n3. Where you are in the batch journey\n4. One thing you could use help with\n\nThis group is for the long run — deadline or no deadline, we keep building together. 🧡",
   author: "hub",
   status: "building",
   ts: 0,
@@ -48,7 +52,7 @@ const INTRO_POST = {
 
 const statusOf = (id) => STATUSES.find((s) => s.id === id) || STATUSES[0];
 const chanOf = (id) => CHANNELS.find((c) => c.id === id);
-const chanKey = (id) => `board2:${id}`;
+const chanKey = (id) => `${BATCH_LABEL}:board:${id}`;
 
 function timeAgo(ts) {
   if (!ts) return "pinned";
@@ -79,7 +83,7 @@ async function saveChannel(id, posts) {
 }
 async function loadMembers() {
   try {
-    const r = await storage.get("members2", true);
+    const r = await storage.get(`${BATCH_LABEL}:members`, true);
     return r ? JSON.parse(r.value) : {};
   } catch {
     return {};
@@ -87,12 +91,12 @@ async function loadMembers() {
 }
 async function saveMembers(m) {
   try {
-    await storage.set("members2", JSON.stringify(m), true);
+    await storage.set(`${BATCH_LABEL}:members`, JSON.stringify(m), true);
   } catch {}
 }
 async function loadProfile() {
   try {
-    const r = await storage.get("profile");
+    const r = await storage.get(`${BATCH_LABEL}:profile`);
     return r ? JSON.parse(r.value) : null;
   } catch {
     return null;
@@ -100,7 +104,7 @@ async function loadProfile() {
 }
 async function saveProfile(p) {
   try {
-    await storage.set("profile", JSON.stringify(p));
+    await storage.set(`${BATCH_LABEL}:profile`, JSON.stringify(p));
   } catch {}
 }
 
@@ -183,7 +187,7 @@ function Onboarding({ onDone }) {
     if (code.trim().toUpperCase() === INVITE_CODE.toUpperCase()) {
       setStep(1);
     } else {
-      setCodeErr("That code doesn't match. Grab the current one from the r/ycombinator F26 thread.");
+      setCodeErr("That code doesn't match. Grab the current one from the r/ycombinator batch thread.");
     }
   };
 
@@ -205,13 +209,13 @@ function Onboarding({ onDone }) {
   return (
     <div style={{ maxWidth: 420, margin: "0 auto", padding: "48px 20px" }}>
       <div style={{ fontFamily: "ui-monospace, Menlo, monospace", color: C.orange, fontSize: 12, fontWeight: 700, letterSpacing: "0.12em" }}>
-        YC FALL 2026
+        {BATCH_NAME.toUpperCase()}
       </div>
       <h1 style={{ fontSize: 30, lineHeight: 1.15, margin: "10px 0 8px", color: C.ink, letterSpacing: "-0.02em" }}>
         Founders Hub
       </h1>
       <p style={{ color: C.sub, fontSize: 14, lineHeight: 1.5, marginBottom: 28 }}>
-        The always-on home for the r/ycombinator F26 thread. Applied, interviewing, accepted or rejected — everyone keeps building together here.
+        The always-on home for the r/ycombinator batch thread. Applied, interviewing, accepted or rejected — everyone keeps building together here.
       </p>
 
       {step === 0 && (
@@ -580,7 +584,7 @@ export default function App() {
         <div style={{ maxWidth: 760, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 8, minWidth: 0 }}>
             <span style={{ background: "#fff", color: C.orange, fontWeight: 900, fontSize: 13, padding: "1px 6px", borderRadius: 4, fontFamily: "ui-monospace, Menlo, monospace" }}>
-              F26
+              {BATCH_LABEL}
             </span>
             <span style={{ color: "#fff", fontWeight: 800, fontSize: 15, letterSpacing: "-0.01em", whiteSpace: "nowrap" }}>Founders Hub</span>
           </div>
