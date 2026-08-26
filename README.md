@@ -35,17 +35,19 @@ vars (e.g. `W27` / `YC Winter 2027`) — the app spins up a fresh board for the 
 batch automatically, while previous batches' data stays intact (storage keys are
 namespaced per batch).
 
-## ⚠️ Demo mode — read this first
+## Storage modes
 
-Storage currently uses `localStorage` (see `src/storage.js`), so data lives
-**only in your own browser**. It's perfect for local dev and UI work, but it is
-not multi-user yet. Making it real is the #1 roadmap item — see below.
+With `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` set, shared data (posts,
+members) lives in Supabase — fully multi-user. Without them, the app falls back
+to **demo mode** (`localStorage`, this browser only), which is handy for local
+dev and UI work. See `DEPLOYMENT.md` for setup.
 
 ## Roadmap (help wanted!)
 
-- [ ] **Real backend** — implement `src/storage.js` on Supabase/Firebase/etc. (keeps the same 4-method interface)
+- [x] **Real backend** — Supabase-powered shared storage (`src/storage.js`), with localStorage demo-mode fallback
 - [ ] Real auth (magic links) instead of honor-system display names
-- [ ] Moderation tools: report, delete, admin approval queue for new members
+- [x] Moderation basics: edit/delete, community reports with 24h auto-suspend, admin restore/reinstate/remove
+- [ ] Admin approval queue for new members
 - [ ] Realtime updates instead of manual refresh
 - [ ] Notifications for replies
 - [ ] Direct messages for co-founder matching
