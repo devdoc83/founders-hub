@@ -3,12 +3,23 @@ import { storage } from "./storage";
 
 // ================= CONFIG =================
 // Share this code ONLY in your subreddit thread / DMs.
-// Ask Claude to change it anytime before publishing.
 const INVITE_CODE = import.meta.env.VITE_INVITE_CODE || "F26-BUILD";
 // Batch is configurable — future batches just change these env vars.
 // Each batch label gets its own fresh board (storage keys are namespaced).
 const BATCH_LABEL = import.meta.env.VITE_BATCH_LABEL || "F26";
 const BATCH_NAME = import.meta.env.VITE_BATCH_NAME || "YC Fall 2026";
+// Comma-separated admin display names (admins can delete anything,
+// restore hidden content, and reinstate suspended members).
+const ADMIN_NAMES = (import.meta.env.VITE_ADMIN_NAMES || "devdoc83")
+  .split(",")
+  .map((n) => n.trim())
+  .filter(Boolean);
+// Community moderation rule: this many reports from distinct members
+// hides the content and suspends its author for BAN_HOURS.
+const REPORT_THRESHOLD = 5;
+const BAN_HOURS = 24;
+
+const isAdminName = (name) => ADMIN_NAMES.includes(name);
 
 // ---------- Design tokens (modern Hacker News homage) ----------
 const C = {
@@ -19,6 +30,7 @@ const C = {
   line: "#E4E2D6",
   orange: "#FF6600",
   orangeDark: "#D95400",
+  danger: "#B91C1C",
 };
 
 const STATUSES = [
@@ -38,7 +50,7 @@ const CHANNELS = [
   { id: "general", label: "General", emoji: "💬", blurb: "Everything else. Wins, rants, memes, life." },
 ];
 
-const MEMBERS_TAB = { id: "members", label: "Members", emoji: "\ud83d\udc65", blurb: "Everyone in the hub and where they are in the journey." };
+const MEMBERS_TAB = { id: "members", label: "Members", emoji: "👥", blurb: "Everyone in the hub and where they are in the journey." };
 
 const INTRO_POST = {
   id: "pinned_intro",
@@ -55,6 +67,12 @@ const INTRO_POST = {
 const statusOf = (id) => STATUSES.find((s) => s.id === id) || STATUSES[0];
 const chanOf = (id) => CHANNELS.find((c) => c.id === id);
 const chanKey = (id) => `${BATCH_LABEL}:board:${id}`;
+const reportsOf = (x) => x.reports || [];
+const isHidden = (x) => reportsOf(x).length >= REPORT_THRESHOLD;
+const bannedUntilOf = (members, name) => {
+  const m = members[name];
+  return m && m.bannedUntil && m.bannedUntil > Date.now() ? m.bannedUntil : null;
+};
 
 function timeAgo(ts) {
   if (!ts) return "pinned";
@@ -162,6 +180,26 @@ function Btn({ children, onClick, kind = "primary", disabled, style }) {
   );
 }
 
+function MetaBtn({ children, onClick, color }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        background: "none",
+        border: "none",
+        color: color || C.sub,
+        fontSize: 11,
+        fontWeight: 700,
+        cursor: "pointer",
+        padding: 0,
+        fontFamily: "inherit",
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
 const inputStyle = {
   width: "100%",
   boxSizing: "border-box",
@@ -177,7 +215,7 @@ const inputStyle = {
 
 // ---------- Onboarding (with invite gate) ----------
 function Onboarding({ onDone }) {
-  const [step, setStep] = useState(0); // 0 = code, 1 = profile
+  const [step, setStep] = useState(0);
   const [code, setCode] = useState("");
   const [codeErr, setCodeErr] = useState("");
   const [name, setName] = useState("");
@@ -189,7 +227,7 @@ function Onboarding({ onDone }) {
     if (code.trim().toUpperCase() === INVITE_CODE.toUpperCase()) {
       setStep(1);
     } else {
-      setCodeErr("That code doesn't match. Grab the current one from the r/ycombinator batch thread.");
+      setCodeErr("That code doesn't match. Grab the current one from the community thread.");
     }
   };
 
@@ -232,14 +270,14 @@ function Onboarding({ onDone }) {
             onChange={(e) => { setCode(e.target.value); setCodeErr(""); }}
             onKeyDown={(e) => e.key === "Enter" && code.trim() && tryCode()}
           />
-          {codeErr && <div style={{ color: "#B91C1C", fontSize: 12, marginTop: 8, lineHeight: 1.4 }}>{codeErr}</div>}
+          {codeErr && <div style={{ color: C.danger, fontSize: 12, marginTop: 8, lineHeight: 1.4 }}>{codeErr}</div>}
           <div style={{ marginTop: 20 }}>
             <Btn disabled={!code.trim()} onClick={tryCode} style={{ width: "100%", padding: "12px" }}>
               Continue →
             </Btn>
           </div>
           <p style={{ color: C.sub, fontSize: 11, marginTop: 14, lineHeight: 1.5 }}>
-            This gate keeps the hub to people from the F26 application thread. It's a community filter, not bank-grade security — be a good neighbor. 🧡
+            This gate keeps the hub to people from the application thread. It's a community filter, not bank-grade security — be a good neighbor. 🧡
           </p>
         </>
       )}
@@ -256,7 +294,7 @@ function Onboarding({ onDone }) {
             maxLength={24}
             onChange={(e) => { setName(e.target.value); setNameErr(""); }}
           />
-          {nameErr && <div style={{ color: "#B91C1C", fontSize: 12, marginTop: 8, lineHeight: 1.4 }}>{nameErr}</div>}
+          {nameErr && <div style={{ color: C.danger, fontSize: 12, marginTop: 8, lineHeight: 1.4 }}>{nameErr}</div>}
           <label style={{ fontSize: 12, fontWeight: 700, color: C.ink, display: "block", margin: "18px 0 8px" }}>
             Where are you in the batch journey?
           </label>
@@ -355,23 +393,114 @@ function Composer({ channel, onSubmit, onCancel }) {
   );
 }
 
+// ---------- Reply row ----------
+function ReplyRow({ post, r, me, admin, muted, actions }) {
+  const mine = r.author === me.name;
+  const hidden = isHidden(r);
+  const alreadyReported = reportsOf(r).includes(me.name);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(r.body);
+
+  if (hidden && !admin) {
+    return (
+      <div style={{ marginBottom: 10, fontSize: 12, color: C.sub, fontStyle: "italic" }}>
+        ⚠️ Reply hidden by community reports.
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ marginBottom: 10, opacity: hidden ? 0.6 : 1 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 12, fontWeight: 700, color: C.ink }}>{r.author}</span>
+        <Chip status={r.status} small />
+        {r.replyTo && (
+          <span style={{ fontSize: 10.5, color: C.orangeDark, fontWeight: 700, fontFamily: "ui-monospace, Menlo, monospace" }}>
+            → @{r.replyTo}
+          </span>
+        )}
+        <span style={{ fontSize: 10.5, color: C.sub, fontFamily: "ui-monospace, Menlo, monospace" }}>
+          {timeAgo(r.ts)}{r.edited ? " · edited" : ""}
+        </span>
+        {!muted && <MetaBtn onClick={() => actions.setReplyTo(r.author)}>↪ reply</MetaBtn>}
+        {mine && !editing && <MetaBtn onClick={() => { setDraft(r.body); setEditing(true); }}>edit</MetaBtn>}
+        {(mine || admin) && (
+          <MetaBtn color={C.danger} onClick={() => window.confirm("Delete this reply?") && actions.deleteReply(post, r.id)}>
+            delete
+          </MetaBtn>
+        )}
+        {!mine && !muted && !r.pinnedAuthor && (
+          <MetaBtn
+            color={alreadyReported ? C.orangeDark : undefined}
+            onClick={() => !alreadyReported && window.confirm("Report this reply to the community? 5 reports hide it and suspend the author for 24h.") && actions.report(post, r)}
+          >
+            🚩{reportsOf(r).length > 0 ? ` ${reportsOf(r).length}` : ""}
+          </MetaBtn>
+        )}
+        {hidden && admin && <MetaBtn color={C.orangeDark} onClick={() => actions.restore(post, r)}>restore</MetaBtn>}
+      </div>
+      {editing ? (
+        <div style={{ marginTop: 6 }}>
+          <textarea style={{ ...inputStyle, minHeight: 60, fontSize: 13, lineHeight: 1.5 }} value={draft} maxLength={1000} onChange={(e) => setDraft(e.target.value)} />
+          <div style={{ display: "flex", gap: 8, marginTop: 6, justifyContent: "flex-end" }}>
+            <Btn kind="ghost" style={{ padding: "6px 12px", fontSize: 12 }} onClick={() => setEditing(false)}>Cancel</Btn>
+            <Btn
+              style={{ padding: "6px 12px", fontSize: 12 }}
+              disabled={!draft.trim()}
+              onClick={async () => { await actions.editReply(post, r.id, draft.trim()); setEditing(false); }}
+            >
+              Save
+            </Btn>
+          </div>
+        </div>
+      ) : (
+        <div style={{ fontSize: 13, color: "#3F3F37", lineHeight: 1.5, marginTop: 3, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{r.body}</div>
+      )}
+    </div>
+  );
+}
+
 // ---------- Post card ----------
-function PostCard({ post, me, onUpvote, onReply, showChannel }) {
+function PostCard({ post, me, admin, muted, actions, showChannel }) {
   const [open, setOpen] = useState(false);
   const [reply, setReply] = useState("");
   const [replyTo, setReplyTo] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draftTitle, setDraftTitle] = useState(post.title);
+  const [draftBody, setDraftBody] = useState(post.body);
+
+  const mine = post.author === me.name;
+  const hidden = isHidden(post);
+  const alreadyReported = reportsOf(post).includes(me.name);
   const upvoted = post.upvotes.includes(me.name);
   const ch = showChannel ? chanOf(post.channelId) : null;
+
+  if (hidden && !admin) {
+    return (
+      <div style={{ background: C.card, border: `1px dashed ${C.line}`, borderRadius: 12, padding: "14px 16px", marginBottom: 10, fontSize: 13, color: C.sub, fontStyle: "italic" }}>
+        ⚠️ Post hidden by community reports.
+      </div>
+    );
+  }
+
+  const sendReply = async () => {
+    setBusy(true);
+    await actions.addReply(post, reply.trim(), replyTo);
+    setReply("");
+    setReplyTo(null);
+    setBusy(false);
+  };
+
   return (
-    <div style={{ background: C.card, border: `1px solid ${post.pinned ? C.orange : C.line}`, borderRadius: 12, padding: "14px 16px", marginBottom: 10 }}>
+    <div style={{ background: C.card, border: `1px solid ${post.pinned ? C.orange : C.line}`, borderRadius: 12, padding: "14px 16px", marginBottom: 10, opacity: hidden ? 0.6 : 1 }}>
       <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
         <button
-          onClick={() => !post.pinned && onUpvote(post)}
+          onClick={() => !post.pinned && !muted && actions.upvote(post)}
           aria-label="Upvote"
           style={{
             display: "flex", flexDirection: "column", alignItems: "center", gap: 2,
-            background: "transparent", border: "none", cursor: post.pinned ? "default" : "pointer", padding: "2px 4px",
+            background: "transparent", border: "none", cursor: post.pinned || muted ? "default" : "pointer", padding: "2px 4px",
             color: post.pinned ? C.orange : upvoted ? C.orange : C.sub, fontFamily: "inherit",
           }}
         >
@@ -379,11 +508,30 @@ function PostCard({ post, me, onUpvote, onReply, showChannel }) {
           {!post.pinned && <span style={{ fontSize: 12, fontWeight: 800 }}>{post.upvotes.length}</span>}
         </button>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 15, fontWeight: 700, color: C.ink, lineHeight: 1.35 }}>{post.title}</div>
-          {post.body && (
-            <div style={{ fontSize: 13.5, color: "#3F3F37", lineHeight: 1.55, marginTop: 6, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
-              {post.body}
+          {editing ? (
+            <div>
+              <input style={{ ...inputStyle, marginBottom: 8, fontWeight: 700 }} value={draftTitle} maxLength={120} onChange={(e) => setDraftTitle(e.target.value)} />
+              <textarea style={{ ...inputStyle, minHeight: 70, lineHeight: 1.5 }} value={draftBody} maxLength={2000} onChange={(e) => setDraftBody(e.target.value)} />
+              <div style={{ display: "flex", gap: 8, marginTop: 8, justifyContent: "flex-end" }}>
+                <Btn kind="ghost" style={{ padding: "6px 12px", fontSize: 12 }} onClick={() => setEditing(false)}>Cancel</Btn>
+                <Btn
+                  style={{ padding: "6px 12px", fontSize: 12 }}
+                  disabled={!draftTitle.trim()}
+                  onClick={async () => { await actions.editPost(post, draftTitle.trim(), draftBody.trim()); setEditing(false); }}
+                >
+                  Save
+                </Btn>
+              </div>
             </div>
+          ) : (
+            <>
+              <div style={{ fontSize: 15, fontWeight: 700, color: C.ink, lineHeight: 1.35 }}>{post.title}</div>
+              {post.body && (
+                <div style={{ fontSize: 13.5, color: "#3F3F37", lineHeight: 1.55, marginTop: 6, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+                  {post.body}
+                </div>
+              )}
+            </>
           )}
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
             <span style={{ fontSize: 12, fontWeight: 700, color: C.ink }}>{post.author}</span>
@@ -393,68 +541,60 @@ function PostCard({ post, me, onUpvote, onReply, showChannel }) {
                 {ch.emoji} {ch.label}
               </span>
             )}
-            <span style={{ fontSize: 11, color: C.sub, fontFamily: "ui-monospace, Menlo, monospace" }}>{timeAgo(post.ts)}</span>
-            <button
-              onClick={() => setOpen(!open)}
-              style={{ background: "none", border: "none", color: C.orangeDark, fontSize: 12, fontWeight: 700, cursor: "pointer", padding: 0, fontFamily: "inherit" }}
-            >
+            <span style={{ fontSize: 11, color: C.sub, fontFamily: "ui-monospace, Menlo, monospace" }}>
+              {timeAgo(post.ts)}{post.edited ? " · edited" : ""}
+            </span>
+            <MetaBtn color={C.orangeDark} onClick={() => setOpen(!open)}>
               {post.replies.length === 0 ? "Reply" : `${post.replies.length} ${post.replies.length === 1 ? "reply" : "replies"}`}
-            </button>
+            </MetaBtn>
+            {!post.pinned && mine && !editing && (
+              <MetaBtn onClick={() => { setDraftTitle(post.title); setDraftBody(post.body); setEditing(true); }}>edit</MetaBtn>
+            )}
+            {!post.pinned && (mine || admin) && (
+              <MetaBtn color={C.danger} onClick={() => window.confirm("Delete this post and all its replies?") && actions.deletePost(post)}>
+                delete
+              </MetaBtn>
+            )}
+            {!post.pinned && !mine && !muted && (
+              <MetaBtn
+                color={alreadyReported ? C.orangeDark : undefined}
+                onClick={() => !alreadyReported && window.confirm("Report this post to the community? 5 reports hide it and suspend the author for 24h.") && actions.report(post, null)}
+              >
+                🚩{reportsOf(post).length > 0 ? ` ${reportsOf(post).length}` : ""}
+              </MetaBtn>
+            )}
+            {hidden && admin && <MetaBtn color={C.orangeDark} onClick={() => actions.restore(post, null)}>restore</MetaBtn>}
           </div>
           {open && (
             <div style={{ marginTop: 12, borderLeft: `2px solid ${C.line}`, paddingLeft: 12 }}>
               {post.replies.map((r) => (
-                <div key={r.id} style={{ marginBottom: 10 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: C.ink }}>{r.author}</span>
-                    <Chip status={r.status} small />
-                    {r.replyTo && (
-                      <span style={{ fontSize: 10.5, color: C.orangeDark, fontWeight: 700, fontFamily: "ui-monospace, Menlo, monospace" }}>
-                        \u2192 @{r.replyTo}
-                      </span>
-                    )}
-                    <span style={{ fontSize: 10.5, color: C.sub, fontFamily: "ui-monospace, Menlo, monospace" }}>{timeAgo(r.ts)}</span>
-                    <button
-                      onClick={() => setReplyTo(r.author)}
-                      style={{ background: "none", border: "none", color: C.sub, fontSize: 10.5, fontWeight: 700, cursor: "pointer", padding: 0, fontFamily: "inherit" }}
-                    >
-                      \u21aa reply
-                    </button>
-                  </div>
-                  <div style={{ fontSize: 13, color: "#3F3F37", lineHeight: 1.5, marginTop: 3, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{r.body}</div>
-                </div>
+                <ReplyRow key={r.id} post={post} r={r} me={me} admin={admin} muted={muted} actions={{ ...actions, setReplyTo }} />
               ))}
-              <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                <input
-                  style={{ ...inputStyle, padding: "8px 10px", fontSize: 13 }}
-                  placeholder="Add a reply…"
-                  value={reply}
-                  maxLength={1000}
-                  onChange={(e) => setReply(e.target.value)}
-                  onKeyDown={async (e) => {
-                    if (e.key === "Enter" && reply.trim() && !busy) {
-                      setBusy(true);
-                      await onReply(post, reply.trim(), replyTo);
-                      setReply("");
-                      setReplyTo(null);
-                      setBusy(false);
-                    }
-                  }}
-                />
-                <Btn
-                  disabled={!reply.trim() || busy}
-                  style={{ padding: "8px 14px" }}
-                  onClick={async () => {
-                    setBusy(true);
-                    await onReply(post, reply.trim(), replyTo);
-                    setReply("");
-                    setReplyTo(null);
-                    setBusy(false);
-                  }}
-                >
-                  ↩
-                </Btn>
-              </div>
+              {muted ? (
+                <div style={{ fontSize: 12, color: C.sub, fontStyle: "italic" }}>You're temporarily suspended — replying is paused.</div>
+              ) : (
+                <>
+                  {replyTo && (
+                    <div style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "#FFF7ED", border: `1px solid ${C.line}`, borderRadius: 999, padding: "3px 10px", marginTop: 8, fontSize: 11, fontWeight: 700, color: C.orangeDark }}>
+                      Replying to @{replyTo}
+                      <button onClick={() => setReplyTo(null)} style={{ background: "none", border: "none", cursor: "pointer", color: C.sub, fontWeight: 800, padding: 0, fontFamily: "inherit" }}>✕</button>
+                    </div>
+                  )}
+                  <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                    <input
+                      style={{ ...inputStyle, padding: "8px 10px", fontSize: 13 }}
+                      placeholder={replyTo ? `Reply to @${replyTo}…` : "Add a reply…"}
+                      value={reply}
+                      maxLength={1000}
+                      onChange={(e) => setReply(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && reply.trim() && !busy && sendReply()}
+                    />
+                    <Btn disabled={!reply.trim() || busy} style={{ padding: "8px 14px" }} onClick={sendReply}>
+                      ↩
+                    </Btn>
+                  </div>
+                </>
+              )}
             </div>
           )}
         </div>
@@ -477,6 +617,10 @@ export default function App() {
   const [results, setResults] = useState(null);
   const [searching, setSearching] = useState(false);
 
+  const admin = profile ? isAdminName(profile.name) : false;
+  const bannedUntil = profile ? bannedUntilOf(members, profile.name) : null;
+  const muted = Boolean(bannedUntil) && !admin;
+
   useEffect(() => {
     (async () => {
       const p = await loadProfile();
@@ -497,7 +641,6 @@ export default function App() {
   const refresh = useCallback(async (chanId) => {
     setLoading(true);
     let data = await loadChannel(chanId);
-    // Seed the pinned intro thread in General on first visit
     if (chanId === "general" && !data.some((p) => p.id === INTRO_POST.id)) {
       data = [INTRO_POST, ...data];
       await saveChannel(chanId, data);
@@ -520,19 +663,24 @@ export default function App() {
     const fresh = await loadChannel(chanId);
     await saveChannel(chanId, fn(fresh));
     if (results !== null) await runSearch(query);
-    else await refresh(chanId);
+    else if (channel.id !== "members") await refresh(chanId);
   };
 
+  const targetChan = (post) => post.channelId || channel.id;
+
+  // ----- content actions -----
   const addPost = async (title, body) => {
+    if (muted) return;
     await mutate(channel.id, (list) => [
-      { id: `p_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, title, body, author: profile.name, status: profile.status, ts: Date.now(), upvotes: [], replies: [] },
+      { id: `p_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, title, body, author: profile.name, status: profile.status, ts: Date.now(), upvotes: [], replies: [], reports: [] },
       ...list,
     ]);
     setComposing(false);
   };
 
   const upvote = async (post) => {
-    await mutate(post.channelId || channel.id, (list) =>
+    if (muted) return;
+    await mutate(targetChan(post), (list) =>
       list.map((p) => {
         if (p.id !== post.id) return p;
         const has = p.upvotes.includes(profile.name);
@@ -542,13 +690,109 @@ export default function App() {
   };
 
   const addReply = async (post, body, replyTo) => {
-    await mutate(post.channelId || channel.id, (list) =>
+    if (muted) return;
+    await mutate(targetChan(post), (list) =>
       list.map((p) =>
         p.id === post.id
-          ? { ...p, replies: [...p.replies, { id: `r_${Date.now()}`, author: profile.name, status: profile.status, body, ts: Date.now(), ...(replyTo ? { replyTo } : {}) }] }
+          ? { ...p, replies: [...p.replies, { id: `r_${Date.now()}`, author: profile.name, status: profile.status, body, ts: Date.now(), reports: [], ...(replyTo ? { replyTo } : {}) }] }
           : p
       )
     );
+  };
+
+  const editPost = async (post, title, body) => {
+    await mutate(targetChan(post), (list) =>
+      list.map((p) => (p.id === post.id && p.author === profile.name ? { ...p, title, body, edited: true } : p))
+    );
+  };
+
+  const deletePost = async (post) => {
+    await mutate(targetChan(post), (list) =>
+      list.filter((p) => !(p.id === post.id && (p.author === profile.name || admin)))
+    );
+  };
+
+  const editReply = async (post, replyId, body) => {
+    await mutate(targetChan(post), (list) =>
+      list.map((p) =>
+        p.id === post.id
+          ? { ...p, replies: p.replies.map((r) => (r.id === replyId && r.author === profile.name ? { ...r, body, edited: true } : r)) }
+          : p
+      )
+    );
+  };
+
+  const deleteReply = async (post, replyId) => {
+    await mutate(targetChan(post), (list) =>
+      list.map((p) =>
+        p.id === post.id
+          ? { ...p, replies: p.replies.filter((r) => !(r.id === replyId && (r.author === profile.name || admin))) }
+          : p
+      )
+    );
+  };
+
+  // ----- community moderation -----
+  const suspendIfNeeded = async (authorName, reportCount) => {
+    if (reportCount < REPORT_THRESHOLD || isAdminName(authorName)) return;
+    const m = await loadMembers();
+    if (m[authorName]) {
+      const until = Date.now() + BAN_HOURS * 3600 * 1000;
+      m[authorName].bannedUntil = Math.max(m[authorName].bannedUntil || 0, until);
+      await saveMembers(m);
+      setMembers(m);
+    }
+  };
+
+  const report = async (post, replyOrNull) => {
+    if (muted) return;
+    let authorName = null;
+    let newCount = 0;
+    await mutate(targetChan(post), (list) =>
+      list.map((p) => {
+        if (p.id !== post.id) return p;
+        if (!replyOrNull) {
+          const reps = reportsOf(p);
+          if (reps.includes(profile.name) || p.author === profile.name) return p;
+          authorName = p.author;
+          newCount = reps.length + 1;
+          return { ...p, reports: [...reps, profile.name] };
+        }
+        return {
+          ...p,
+          replies: p.replies.map((r) => {
+            if (r.id !== replyOrNull.id) return r;
+            const reps = reportsOf(r);
+            if (reps.includes(profile.name) || r.author === profile.name) return r;
+            authorName = r.author;
+            newCount = reps.length + 1;
+            return { ...r, reports: [...reps, profile.name] };
+          }),
+        };
+      })
+    );
+    if (authorName) await suspendIfNeeded(authorName, newCount);
+  };
+
+  const restore = async (post, replyOrNull) => {
+    if (!admin) return;
+    await mutate(targetChan(post), (list) =>
+      list.map((p) => {
+        if (p.id !== post.id) return p;
+        if (!replyOrNull) return { ...p, reports: [] };
+        return { ...p, replies: p.replies.map((r) => (r.id === replyOrNull.id ? { ...r, reports: [] } : r)) };
+      })
+    );
+  };
+
+  const reinstate = async (name) => {
+    if (!admin) return;
+    const m = await loadMembers();
+    if (m[name]) {
+      delete m[name].bannedUntil;
+      await saveMembers(m);
+      setMembers(m);
+    }
   };
 
   const setStatus = async (statusId) => {
@@ -583,6 +827,8 @@ export default function App() {
     setSearching(false);
   };
 
+  const actions = { upvote, addReply, editPost, deletePost, editReply, deleteReply, report, restore };
+
   if (!checked) return <div style={{ minHeight: "100vh", background: C.bg }} />;
   if (!profile)
     return (
@@ -614,7 +860,7 @@ export default function App() {
             onClick={() => setShowStatusPicker(!showStatusPicker)}
             style={{ background: "rgba(255,255,255,0.18)", border: "none", borderRadius: 999, padding: "4px 11px", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 180 }}
           >
-            {profile.name} · {statusOf(profile.status).label}
+            {profile.name}{admin ? " ⭐" : ""} · {statusOf(profile.status).label}
           </button>
         </div>
         {showStatusPicker && (
@@ -627,6 +873,15 @@ export default function App() {
           </div>
         )}
       </header>
+
+      {/* Suspension banner */}
+      {muted && (
+        <div style={{ background: "#FEF2F2", borderBottom: "1px solid #FECACA", padding: "8px 16px" }}>
+          <div style={{ maxWidth: 760, margin: "0 auto", fontSize: 12.5, color: C.danger, lineHeight: 1.4 }}>
+            🚫 You've been temporarily suspended by community reports until {new Date(bannedUntil).toLocaleString()}. You can still read everything. An admin can reinstate you earlier.
+          </div>
+        </div>
+      )}
 
       {/* Live batch stats */}
       <StatsBar members={members} />
@@ -691,7 +946,7 @@ export default function App() {
                   <div style={{ color: C.sub, fontSize: 13 }}>Try a shorter keyword, or clear the search to browse channels.</div>
                 </div>
               ) : (
-                results.map((p) => <PostCard key={`${p.channelId}_${p.id}`} post={p} me={profile} onUpvote={upvote} onReply={addReply} showChannel />)
+                results.map((p) => <PostCard key={`${p.channelId}_${p.id}`} post={p} me={profile} admin={admin} muted={muted} actions={actions} showChannel />)
               )}
             </>
           )
@@ -699,29 +954,46 @@ export default function App() {
           <>
             <p style={{ color: C.sub, fontSize: 12.5, lineHeight: 1.4, margin: "0 0 14px" }}>{channel.blurb}</p>
             {loading ? (
-              <div style={{ textAlign: "center", color: C.sub, padding: 40, fontSize: 13, fontFamily: "ui-monospace, Menlo, monospace" }}>loading members\u2026</div>
+              <div style={{ textAlign: "center", color: C.sub, padding: 40, fontSize: 13, fontFamily: "ui-monospace, Menlo, monospace" }}>loading members…</div>
             ) : (
               Object.entries(members)
                 .sort((a, b) => b[1].joinedAt - a[1].joinedAt)
-                .map(([name, m]) => (
-                  <div key={name} style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 12, padding: "12px 16px", marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-                      <span style={{ width: 30, height: 30, borderRadius: 999, background: "#FFF7ED", color: C.orangeDark, display: "inline-flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 13, flexShrink: 0 }}>
-                        {name.slice(0, 1).toUpperCase()}
-                      </span>
-                      <span style={{ fontSize: 14, fontWeight: 700, color: C.ink, overflow: "hidden", textOverflow: "ellipsis" }}>{name}</span>
-                      <Chip status={m.status} small />
+                .map(([name, m]) => {
+                  const suspended = m.bannedUntil && m.bannedUntil > Date.now();
+                  return (
+                    <div key={name} style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 12, padding: "12px 16px", marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+                        <span style={{ width: 30, height: 30, borderRadius: 999, background: "#FFF7ED", color: C.orangeDark, display: "inline-flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 13, flexShrink: 0 }}>
+                          {name.slice(0, 1).toUpperCase()}
+                        </span>
+                        <span style={{ fontSize: 14, fontWeight: 700, color: C.ink, overflow: "hidden", textOverflow: "ellipsis" }}>
+                          {name}{isAdminName(name) ? " ⭐" : ""}
+                        </span>
+                        <Chip status={m.status} small />
+                        {suspended && (
+                          <span style={{ fontSize: 10, fontWeight: 700, color: C.danger, background: "#FEF2F2", borderRadius: 999, padding: "1px 7px", fontFamily: "ui-monospace, Menlo, monospace" }}>
+                            🚫 suspended
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        {suspended && admin && (
+                          <Btn kind="ghost" style={{ padding: "5px 11px", fontSize: 11 }} onClick={() => reinstate(name)}>
+                            Reinstate
+                          </Btn>
+                        )}
+                        <span style={{ fontSize: 11, color: C.sub, fontFamily: "ui-monospace, Menlo, monospace" }}>joined {timeAgo(m.joinedAt)}</span>
+                      </div>
                     </div>
-                    <span style={{ fontSize: 11, color: C.sub, fontFamily: "ui-monospace, Menlo, monospace" }}>joined {timeAgo(m.joinedAt)}</span>
-                  </div>
-                ))
+                  );
+                })
             )}
           </>
         ) : (
           <>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 14 }}>
               <p style={{ color: C.sub, fontSize: 12.5, lineHeight: 1.4, margin: 0 }}>{channel.blurb}</p>
-              {!composing && <Btn onClick={() => setComposing(true)} style={{ flexShrink: 0 }}>+ Post</Btn>}
+              {!composing && !muted && <Btn onClick={() => setComposing(true)} style={{ flexShrink: 0 }}>+ Post</Btn>}
             </div>
 
             {composing && <Composer channel={channel} onSubmit={addPost} onCancel={() => setComposing(false)} />}
@@ -735,10 +1007,10 @@ export default function App() {
                 <div style={{ fontSize: 30, marginBottom: 8 }}>{channel.emoji}</div>
                 <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 4 }}>Nothing here yet</div>
                 <div style={{ color: C.sub, fontSize: 13, marginBottom: 16 }}>Be the first to start the conversation in {channel.label}.</div>
-                <Btn onClick={() => setComposing(true)}>Write the first post</Btn>
+                {!muted && <Btn onClick={() => setComposing(true)}>Write the first post</Btn>}
               </div>
             ) : (
-              posts.map((p) => <PostCard key={p.id} post={p} me={profile} onUpvote={upvote} onReply={addReply} />)
+              posts.map((p) => <PostCard key={p.id} post={p} me={profile} admin={admin} muted={muted} actions={actions} />)
             )}
 
             <div style={{ textAlign: "center", marginTop: 20 }}>
