@@ -4,6 +4,8 @@ An always-on community board for **YC batch applicants** (starting with Fall 202
 r/ycombinator application megathread. Applied, interviewing, accepted, rejected,
 or building anyway: everyone keeps helping each other here, long after decision day.
 
+> **Unofficial community project** — not affiliated with, endorsed by, or connected to Y Combinator in any way.
+
 ## Features
 
 - 🔑 Invite-code gate (share the code only in the community thread)

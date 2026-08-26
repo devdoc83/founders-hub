@@ -284,6 +284,9 @@ function Onboarding({ onDone }) {
           <p style={{ color: C.sub, fontSize: 11, marginTop: 14, lineHeight: 1.5 }}>
             This gate keeps the hub to people from the application thread. It's a community filter, not bank-grade security — be a good neighbor. 🧡
           </p>
+          <p style={{ color: C.sub, fontSize: 10.5, marginTop: 10, lineHeight: 1.5, fontFamily: "ui-monospace, Menlo, monospace" }}>
+            Unofficial community project — not affiliated with or endorsed by Y Combinator.
+          </p>
         </>
       )}
 
