@@ -132,6 +132,11 @@ async function deleteProfile() {
     await storage.delete(`${BATCH_LABEL}:profile`);
   } catch {}
 }
+async function hashPin(pin) {
+  const data = new TextEncoder().encode(`f26hub-pin:${pin}`);
+  const buf = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
 
 // ---------- UI atoms ----------
 function Chip({ status, small }) {
@@ -225,6 +230,7 @@ function Onboarding({ onDone }) {
   const [codeErr, setCodeErr] = useState("");
   const [name, setName] = useState("");
   const [nameErr, setNameErr] = useState("");
+  const [pin, setPin] = useState("");
   const [status, setStatus] = useState("applied");
   const [busy, setBusy] = useState(false);
 
@@ -240,12 +246,27 @@ function Onboarding({ onDone }) {
     setBusy(true);
     const members = await loadMembers();
     const clean = name.trim();
-    if (members[clean]) {
-      setNameErr("That name is taken by another member — pick a different one.");
+    const pinHash = await hashPin(pin);
+    const existingKey = Object.keys(members).find((n) => n.toLowerCase() === clean.toLowerCase());
+    if (existingKey) {
+      const m = members[existingKey];
+      if (!m.pinHash) {
+        // Legacy member without a PIN yet: first sign-in from a new device sets it.
+        m.pinHash = pinHash;
+        await saveMembers(members);
+        await onDone({ name: existingKey, status: m.status });
+      } else if (m.pinHash === pinHash) {
+        // Correct PIN: sign in as this member on this device.
+        await onDone({ name: existingKey, status: m.status });
+      } else {
+        setNameErr(`"${existingKey}" is registered. Enter its PIN to sign in on this device, or pick a different name.`);
+        setBusy(false);
+        return;
+      }
       setBusy(false);
       return;
     }
-    members[clean] = { status, joinedAt: Date.now() };
+    members[clean] = { status, joinedAt: Date.now(), pinHash };
     await saveMembers(members);
     await onDone({ name: clean, status });
     setBusy(false);
@@ -303,6 +324,21 @@ function Onboarding({ onDone }) {
             onChange={(e) => { setName(e.target.value); setNameErr(""); }}
           />
           {nameErr && <div style={{ color: C.danger, fontSize: 12, marginTop: 8, lineHeight: 1.4 }}>{nameErr}</div>}
+          <label style={{ fontSize: 12, fontWeight: 700, color: C.ink, display: "block", margin: "18px 0 6px" }}>
+            PIN (4–8 digits)
+          </label>
+          <input
+            style={{ ...inputStyle, fontFamily: "ui-monospace, Menlo, monospace", letterSpacing: "0.2em" }}
+            placeholder="e.g. 4821"
+            value={pin}
+            type="password"
+            inputMode="numeric"
+            maxLength={8}
+            onChange={(e) => { setPin(e.target.value.replace(/[^0-9]/g, "")); setNameErr(""); }}
+          />
+          <p style={{ color: C.sub, fontSize: 11, marginTop: 6, lineHeight: 1.5 }}>
+            New name: this sets your PIN — remember it, it's how you sign in on other devices. Existing name: enter your PIN to sign in as you.
+          </p>
           <label style={{ fontSize: 12, fontWeight: 700, color: C.ink, display: "block", margin: "18px 0 8px" }}>
             Where are you in the batch journey?
           </label>
@@ -328,7 +364,7 @@ function Onboarding({ onDone }) {
             ))}
           </div>
           <div style={{ marginTop: 28 }}>
-            <Btn disabled={!name.trim() || busy} onClick={join} style={{ width: "100%", padding: "12px" }}>
+            <Btn disabled={!name.trim() || pin.length < 4 || busy} onClick={join} style={{ width: "100%", padding: "12px" }}>
               {busy ? "Joining…" : "Join the hub →"}
             </Btn>
           </div>
