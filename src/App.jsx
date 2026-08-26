@@ -127,6 +127,11 @@ async function saveProfile(p) {
     await storage.set(`${BATCH_LABEL}:profile`, JSON.stringify(p));
   } catch {}
 }
+async function deleteProfile() {
+  try {
+    await storage.delete(`${BATCH_LABEL}:profile`);
+  } catch {}
+}
 
 // ---------- UI atoms ----------
 function Chip({ status, small }) {
@@ -630,6 +635,15 @@ export default function App() {
     })();
   }, []);
 
+  // If an admin removed this member, sign them out on next roster refresh.
+  useEffect(() => {
+    if (!profile) return;
+    if (Object.keys(members).length > 0 && !members[profile.name]) {
+      deleteProfile();
+      setProfile(null);
+    }
+  }, [members, profile]);
+
   const sortPosts = (data) =>
     data.sort((a, b) => {
       if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
@@ -793,6 +807,14 @@ export default function App() {
       await saveMembers(m);
       setMembers(m);
     }
+  };
+
+  const removeMember = async (name) => {
+    if (!admin || isAdminName(name)) return;
+    const m = await loadMembers();
+    delete m[name];
+    await saveMembers(m);
+    setMembers(m);
   };
 
   const setStatus = async (statusId) => {
@@ -981,6 +1003,14 @@ export default function App() {
                           <Btn kind="ghost" style={{ padding: "5px 11px", fontSize: 11 }} onClick={() => reinstate(name)}>
                             Reinstate
                           </Btn>
+                        )}
+                        {admin && !isAdminName(name) && (
+                          <button
+                            onClick={() => window.confirm(`Remove ${name} from the hub? Their posts stay until deleted, and their name becomes available again.`) && removeMember(name)}
+                            style={{ background: "#FEF2F2", border: "1px solid #FECACA", color: C.danger, borderRadius: 8, padding: "5px 11px", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}
+                          >
+                            Remove
+                          </button>
                         )}
                         <span style={{ fontSize: 11, color: C.sub, fontFamily: "ui-monospace, Menlo, monospace" }}>joined {timeAgo(m.joinedAt)}</span>
                       </div>
