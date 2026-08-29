@@ -34,7 +34,8 @@ const C = {
 };
 
 const STATUSES = [
-  { id: "applied", label: "Applied", color: "#B45309", bg: "#FEF3C7" },
+  { id: "applied", label: "Applied F26", color: "#B45309", bg: "#FEF3C7" },
+  { id: "applying_w27", label: "Applying W27", color: "#0F766E", bg: "#CCFBF1" },
   { id: "interviewing", label: "Interviewing", color: "#1D4ED8", bg: "#DBEAFE" },
   { id: "accepted", label: "Accepted 🎉", color: "#15803D", bg: "#DCFCE7" },
   { id: "rejected", label: "Not this batch", color: "#52525B", bg: "#E4E4E7" },
@@ -42,13 +43,21 @@ const STATUSES = [
 ];
 
 const CHANNELS = [
-  { id: "applications", label: "Applications", emoji: "📋", blurb: "Questions, tips and timelines for the F26 app." },
-  { id: "interviews", label: "Interviews", emoji: "🎤", blurb: "Prep, mock questions, and post-interview debriefs." },
-  { id: "results", label: "Results", emoji: "📣", blurb: "Who's heard back? Share the news — good or bad." },
+  { id: "w27", label: "Winter 2027", emoji: "🎯", blurb: "The next shot. W27 prep: essays, timelines, mock reviews, accountability partners." },
+  { id: "build", label: "Build & help", emoji: "🛠️", blurb: "Stuck on product, growth, tech, or fundraising? Ask. Someone here has been through it." },
   { id: "cofounders", label: "Co-founder search", emoji: "🤝", blurb: "Find your other half. Post what you're building and who you need." },
-  { id: "build", label: "Build & help", emoji: "🛠️", blurb: "Get unblocked: product, tech, growth, fundraising." },
-  { id: "general", label: "General", emoji: "💬", blurb: "Everything else. Wins, rants, memes, life." },
+  { id: "results", label: "Results", emoji: "📣", blurb: "Share your outcome, good or bad. Every result gets respect here." },
+  { id: "interviews", label: "Interviews", emoji: "🎤", blurb: "Prep together, debrief after. Find mock interview partners here." },
+  { id: "applications", label: "F26 archive", emoji: "📋", blurb: "The Fall '26 cycle: what we asked, learned, and survived." },
+  { id: "general", label: "General", emoji: "💬", blurb: "Wins, rants, memes, life. Say anything." },
 ];
+
+const POST_KINDS = [
+  { id: "ask", label: "🙋 Ask for help", color: "#9A3412", bg: "#FFEDD5" },
+  { id: "share", label: "💡 Share", color: "#1E40AF", bg: "#DBEAFE" },
+  { id: "win", label: "🎉 Win", color: "#15803D", bg: "#DCFCE7" },
+];
+const kindOf = (id) => POST_KINDS.find((k) => k.id === id);
 
 const MEMBERS_TAB = { id: "members", label: "Members", emoji: "👥", blurb: "Everyone in the hub and where they are in the journey." };
 
@@ -406,11 +415,33 @@ function StatsBar({ members }) {
 function Composer({ channel, onSubmit, onCancel }) {
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
+  const [kind, setKind] = useState("ask");
   const [busy, setBusy] = useState(false);
   return (
     <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 12, padding: 16, marginBottom: 16 }}>
       <div style={{ fontSize: 12, color: C.sub, marginBottom: 10, fontFamily: "ui-monospace, Menlo, monospace" }}>
         New post in {channel.emoji} {channel.label}
+      </div>
+      <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
+        {POST_KINDS.map((k) => (
+          <button
+            key={k.id}
+            onClick={() => setKind(kind === k.id ? null : k.id)}
+            style={{
+              background: kind === k.id ? k.bg : "#fff",
+              color: k.color,
+              border: `2px solid ${kind === k.id ? k.color : C.line}`,
+              borderRadius: 999,
+              padding: "4px 11px",
+              fontSize: 11.5,
+              fontWeight: 700,
+              cursor: "pointer",
+              fontFamily: "inherit",
+            }}
+          >
+            {k.label}
+          </button>
+        ))}
       </div>
       <input style={{ ...inputStyle, marginBottom: 10, fontWeight: 700 }} placeholder="Title" value={title} maxLength={120} onChange={(e) => setTitle(e.target.value)} />
       <textarea
@@ -426,7 +457,7 @@ function Composer({ channel, onSubmit, onCancel }) {
           disabled={!title.trim() || busy}
           onClick={async () => {
             setBusy(true);
-            await onSubmit(title.trim(), body.trim());
+            await onSubmit(title.trim(), body.trim(), kind);
             setBusy(false);
           }}
         >
@@ -569,13 +600,25 @@ function PostCard({ post, me, admin, muted, actions, showChannel }) {
             </div>
           ) : (
             <>
-              <div style={{ fontSize: 15, fontWeight: 700, color: C.ink, lineHeight: 1.35 }}>{post.title}</div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: C.ink, lineHeight: 1.35 }}>
+                {kindOf(post.kind) && (
+                  <span style={{ background: kindOf(post.kind).bg, color: kindOf(post.kind).color, fontSize: 10.5, fontWeight: 700, padding: "2px 8px", borderRadius: 999, marginRight: 8, whiteSpace: "nowrap", verticalAlign: "2px", fontFamily: "ui-monospace, Menlo, monospace" }}>
+                    {kindOf(post.kind).label}
+                  </span>
+                )}
+                {post.title}
+              </div>
               {post.body && (
                 <div style={{ fontSize: 13.5, color: "#3F3F37", lineHeight: 1.55, marginTop: 6, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
                   {post.body}
                 </div>
               )}
             </>
+          )}
+          {post.kind === "ask" && post.replies.length === 0 && !post.pinned && (
+            <div style={{ marginTop: 8, fontSize: 12, color: "#9A3412", background: "#FFF7ED", border: "1px dashed #FDBA74", borderRadius: 8, padding: "6px 10px", display: "inline-block" }}>
+              🙋 Waiting for a first answer — can you help?
+            </div>
           )}
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
             <span style={{ fontSize: 12, fontWeight: 700, color: C.ink }}>{post.author}</span>
@@ -722,10 +765,10 @@ export default function App() {
   const targetChan = (post) => post.channelId || channel.id;
 
   // ----- content actions -----
-  const addPost = async (title, body) => {
+  const addPost = async (title, body, kind) => {
     if (muted) return;
     await mutate(channel.id, (list) => [
-      { id: `p_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, title, body, author: profile.name, status: profile.status, ts: Date.now(), upvotes: [], replies: [], reports: [] },
+      { id: `p_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, title, body, author: profile.name, status: profile.status, ts: Date.now(), upvotes: [], replies: [], reports: [], ...(kind ? { kind } : {}) },
       ...list,
     ]);
     setComposing(false);
